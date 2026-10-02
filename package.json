@@ -1,0 +1,179 @@
+{
+  "name": "codementor-agent",
+  "displayName": "CodeMentor Agent",
+  "description": "An AI-powered coding agent that helps you build real software while teaching you programming through the implementation process.",
+  "version": "0.1.0",
+  "publisher": "codementor",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Education"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "coding",
+    "tutor",
+    "ollama",
+    "qwen",
+    "teaching"
+  ],
+  "activationEvents": [
+    "onView:codementor.chatView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codementor",
+          "title": "CodeMentor",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codementor": [
+        {
+          "id": "codementor.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codementor.newChat",
+        "title": "CodeMentor: New Chat"
+      },
+      {
+        "command": "codementor.explainSelection",
+        "title": "CodeMentor: Explain Selection"
+      },
+      {
+        "command": "codementor.cancelTask",
+        "title": "CodeMentor: Cancel Active Task"
+      },
+      {
+        "command": "codementor.connectProvider",
+        "title": "CodeMentor: Connect Provider"
+      },
+      {
+        "command": "codementor.viewLearningProfile",
+        "title": "CodeMentor: View Learning Profile"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codementor.explainSelection",
+          "group": "codementor@1",
+          "when": "editorHasSelection"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "codementor.explainSelection",
+          "group": "codementor@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CodeMentor Agent",
+      "properties": {
+        "codementor.provider.type": {
+          "type": "string",
+          "enum": ["ollama", "openai"],
+          "default": "ollama",
+          "description": "Active LLM provider type."
+        },
+        "codementor.ollama.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama base URL (no trailing path)."
+        },
+        "codementor.ollama.model": {
+          "type": "string",
+          "default": "qwen2.5:7b",
+          "description": "Ollama model identifier (e.g. qwen2.5:7b)."
+        },
+        "codementor.openai.baseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "OpenAI-compatible API base URL."
+        },
+        "codementor.openai.model": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "OpenAI-compatible model identifier."
+        },
+        "codementor.autonomy": {
+          "type": "string",
+          "enum": ["guided", "balanced", "autonomous"],
+          "default": "guided",
+          "description": "Agent autonomy mode. Guided pauses at checkpoints; Balanced uses larger increments; Autonomous runs to completion with minimal interruptions. Safety approvals are never disabled."
+        },
+        "codementor.explanationDepth": {
+          "type": "string",
+          "enum": ["concise", "standard", "deep"],
+          "default": "standard",
+          "description": "Default explanation depth for teaching content."
+        },
+        "codementor.approval.fileChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require approval before the agent writes or edits files."
+        },
+        "codementor.approval.terminalCommands": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require approval before the agent runs terminal commands."
+        },
+        "codementor.maxToolIterations": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum tool-call iterations per task before the agent must stop and report."
+        },
+        "codementor.maxOutputChars": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 1000,
+          "description": "Maximum characters of tool output fed back into the model context per call."
+        },
+        "codementor.timeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "description": "Timeout in milliseconds for a single model request."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "pretest": "npm run compile && npm run lint",
+    "test": "node --test \"out/test/*.test.js\"",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "1.90.0",
+    "@typescript-eslint/eslint-plugin": "^7.7.0",
+    "@typescript-eslint/parser": "^7.7.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.5",
+    "@vscode/vsce": "^2.26.1"
+  }
+}

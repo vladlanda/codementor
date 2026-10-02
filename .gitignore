@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+dist/
+*.vsix
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+secrets/
