@@ -49,6 +49,42 @@
     return box;
   }
 
+  function appendApproval(msg) {
+    const box = el('div', 'msg approval' + (msg.risky ? ' risky' : ''));
+    box.appendChild(el('div', 'role', msg.risky ? 'Approval (risky)' : 'Approval'));
+    const body = el('div', 'body');
+    body.innerHTML =
+      '<strong>' + escapeHtml(msg.title) + '</strong><br>' +
+      escapeHtml(msg.description);
+    if (msg.command) {
+      body.appendChild(el('div', 'cmd', '$ ' + msg.command));
+    }
+    if (Array.isArray(msg.diff)) {
+      for (const d of msg.diff) {
+        const pre = el('pre', 'diff');
+        pre.textContent = d.diff || '';
+        body.appendChild(pre);
+      }
+    }
+    const actions = el('div', 'approval-actions');
+    const approve = el('button', 'btn primary', 'Approve');
+    const deny = el('button', 'btn secondary', 'Deny');
+    const decide = (approved) => {
+      approve.disabled = true;
+      deny.disabled = true;
+      actions.innerHTML = approved ? '<span class="outcome approved">Approved</span>' : '<span class="outcome denied">Denied</span>';
+      vscode.postMessage({ type: 'approvalResponse', requestId: msg.requestId, approved });
+    };
+    approve.addEventListener('click', () => decide(true));
+    deny.addEventListener('click', () => decide(false));
+    actions.appendChild(approve);
+    actions.appendChild(deny);
+    body.appendChild(actions);
+    box.appendChild(body);
+    transcript.appendChild(box);
+    transcript.scrollTop = transcript.scrollHeight;
+  }
+
   function setConnection(info) {
     if (!info) return;
     const dot = info.connected ? 'ok' : 'down';
@@ -106,6 +142,9 @@
         break;
       case 'toolEvent':
         appendMessage({ role: 'tool', tool: msg.event.tool, status: msg.event.status, summary: msg.event.summary });
+        break;
+      case 'approvalRequest':
+        appendApproval(msg);
         break;
       case 'learningCheckpoint':
         appendMessage({ role: 'checkpoint', concept: msg.checkpoint.concept, explanation: msg.checkpoint.explanation, question: msg.checkpoint.question });

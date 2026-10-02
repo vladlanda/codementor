@@ -10,7 +10,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const providerService = new ProviderService(settings, context.secrets);
   const connection = new ConnectionManager(providerService, settings);
 
-  const view = new ChatViewProvider(context, settings, connection);
+  const view = new ChatViewProvider(context, settings, connection, providerService);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, view, {
       webviewOptions: { retainContextWhenHidden: true },

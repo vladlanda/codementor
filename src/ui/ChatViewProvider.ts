@@ -4,9 +4,14 @@ import type {
   ConnectionInfoMsg,
   HostToUiMessage,
   UiToHostMessage,
+  UiMessage,
+  TaskState,
 } from '../messaging/protocol';
 import { ConnectionManager } from '../providers/ConnectionManager';
 import { SettingsService } from '../services/SettingsService';
+import { ProviderService } from '../providers/ProviderService';
+import { AgentRunner } from '../services/AgentRunner';
+import type { AgentEvent } from '../agent/Orchestrator';
 
 /**
  * Owns the sidebar webview: lifecycle, HTML, and the typed message bridge to the
@@ -19,11 +24,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _view: vscode.WebviewView | undefined;
   private _disposed = false;
 
+  private readonly _runner: AgentRunner;
+  private _transcript: UiMessage[] = [];
+  private _activeTaskId: string | null = null;
+  private _activeTaskState: TaskState = 'idle';
+  private _streamingAssistantId: string | null = null;
+
   constructor(
     private readonly _context: vscode.ExtensionContext,
     private readonly _settings: SettingsService,
-    private readonly _connection: ConnectionManager
-  ) {}
+    private readonly _connection: ConnectionManager,
+    providerService: ProviderService
+  ) {
+    this._runner = new AgentRunner(providerService, this._settings);
+  }
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this._view = webviewView;
@@ -55,9 +69,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     const snapshot: HostToUiMessage = {
       type: 'stateSnapshot',
-      messages: [],
-      activeTaskId: null,
-      activeTaskState: 'idle',
+      messages: this._transcript,
+      activeTaskId: this._activeTaskId,
+      activeTaskState: this._activeTaskState,
       connection: this._connection.getSnapshot(),
     };
     this.post(snapshot);
@@ -78,35 +92,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /* ------------------------------------------------------------------ */
 
   public resetChat(): void {
-    // Full conversation store lands in M5/M7. For now ask the UI to clear its transcript.
-    this.post({ type: 'stateSnapshot', messages: [], activeTaskId: null, activeTaskState: 'idle', connection: this._connection.getSnapshot() });
+    if (this._runner.active) {
+      this._runner.cancel();
+    }
+    this._transcript = [];
+    this._activeTaskId = null;
+    this._activeTaskState = 'idle';
+    this._runner.clearHistory();
+    if (this._view) {
+      this.post({ type: 'stateSnapshot', messages: [], activeTaskId: null, activeTaskState: 'idle', connection: this._connection.getSnapshot() });
+    } else {
+      void vscode.window.showInformationMessage('CodeMentor: open the chat panel to start a new conversation.');
+    }
   }
 
-  public async explainSelection(uri?: vscode.Uri): Promise<void> {
+  public async explainSelection(_uri?: vscode.Uri): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.selection.isEmpty) {
       void vscode.window.showInformationMessage('CodeMentor: select some code first.');
       return;
     }
-    const file = uri ? vscode.workspace.fs.readFile(uri) : undefined;
     const selected = editor.document.getText(editor.selection);
-    const docUri = editor.document.uri;
-    const payload = JSON.stringify({
-      uri: docUri.toString(),
-      language: editor.document.languageId,
-      startLine: editor.selection.start.line + 1,
-      endLine: editor.selection.end.line + 1,
-      selected,
-      wholeDocument: file === undefined ? undefined : Buffer.from(await file).toString('utf8'),
-    });
-    // A later milestone routes this to the orchestrator as a task.
-    void vscode.window.showInformationMessage(`CodeMentor: prepared Explain Selection for ${docUri.path}`);
-    void payload;
+    const rel = vscode.workspace.asRelativePath(editor.document.uri);
+    const task =
+      `Explain the following ${editor.document.languageId} code from ${rel} (lines ${editor.selection.start.line + 1}–${editor.selection.end.line + 1}). ` +
+      'Ground your explanation in the actual code, point out the key concepts, and note anything surprising or worth improving.\n\n' +
+      '```' + editor.document.languageId + '\n' + selected + '\n```';
+    if (!this._view) {
+      void vscode.window.showInformationMessage('CodeMentor: open the chat panel to see the explanation.');
+      return;
+    }
+    void this._runTask(this._newTaskId(), task);
   }
 
   public cancelActiveTask(): void {
-    // Orchestrator wiring in M5.
-    void vscode.window.showInformationMessage('CodeMentor: no active task to cancel yet.');
+    if (!this._runner.active) {
+      void vscode.window.showInformationMessage('CodeMentor: no active task to cancel.');
+      return;
+    }
+    this._runner.cancel();
   }
 
   public async promptProviderConnection(): Promise<void> {
@@ -140,16 +164,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async _handleUiMessage(msg: UiToHostMessage): Promise<void> {
     switch (msg.type) {
       case 'userMessage': {
-        // Full orchestration lands in M5. For now acknowledge the bridge works.
-        const ack: HostToUiMessage = {
-          type: 'error',
-          taskId: msg.taskId,
-          code: 'not_implemented',
-          message:
-            'The message bridge is wired. Agent orchestration arrives in Milestone 5 — ' +
-            'providers, tools, and the state machine are next. Try adjusting settings meanwhile.',
-        };
-        this.post(ack);
+        if (this._runner.active) {
+          this.post({ type: 'error', taskId: msg.taskId, code: 'busy', message: 'A task is already running. Cancel it first.' });
+          return;
+        }
+        this._appendTranscript({ id: this._newId('user'), role: 'user', text: msg.text });
+        void this._runTask(msg.taskId, msg.text);
+        break;
+      }
+      case 'approvalResponse': {
+        this._runner.resolveApproval(msg.requestId, msg.approved);
+        break;
+      }
+      case 'cancelTask': {
+        this._runner.cancel();
+        break;
+      }
+      case 'newChat': {
+        this.resetChat();
         break;
       }
       case 'connectionTest':
@@ -162,6 +194,133 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       default:
         break;
     }
+  }
+
+  /** Kick off an orchestrator run for a task id, streaming events to the webview. */
+  private async _runTask(taskId: string, text: string): Promise<void> {
+    this._activeTaskId = taskId;
+    this._activeTaskState = 'planning';
+    this._streamingAssistantId = null;
+
+    const onEvent = (e: AgentEvent): void => {
+      switch (e.type) {
+        case 'state': {
+          this._activeTaskState = e.to;
+          this.post({ type: 'taskState', taskId, state: e.to });
+          break;
+        }
+        case 'text': {
+          if (!this._streamingAssistantId) {
+            this._streamingAssistantId = this._newId('assistant');
+            this._appendTranscript({ id: this._streamingAssistantId, role: 'assistant', text: '', state: 'streaming' });
+            this.post({ type: 'streamStart', taskId, messageId: this._streamingAssistantId });
+          }
+          this._appendAssistantDelta(e.delta);
+          this.post({ type: 'streamChunk', taskId, messageId: this._streamingAssistantId, delta: e.delta });
+          break;
+        }
+        case 'tool': {
+          const status = e.result.ok ? 'succeeded' : 'failed';
+          this._appendTranscript({
+            id: this._newId('tool'),
+            role: 'tool',
+            tool: e.name,
+            status,
+            summary: e.result.summary,
+          });
+          this.post({ type: 'toolEvent', taskId, event: { tool: e.name, status, summary: e.result.summary } });
+          break;
+        }
+        case 'approval': {
+          const { requestId, ...req } = e.request;
+          this._appendTranscript({
+            id: this._newId('approval'),
+            role: 'approval',
+            kind: req.kind,
+            title: req.title,
+            description: req.description,
+          });
+          this.post({
+            type: 'approvalRequest',
+            taskId,
+            requestId,
+            kind: req.kind,
+            title: req.title,
+            description: req.description,
+            risky: req.risky,
+            command: req.command,
+            diff: req.diff,
+          });
+          break;
+        }
+        case 'error': {
+          this._appendTranscript({ id: this._newId('error'), role: 'error', code: e.code, message: e.message });
+          this.post({ type: 'error', taskId, code: e.code, message: e.message });
+          break;
+        }
+        case 'done': {
+          if (this._streamingAssistantId) {
+            this.post({ type: 'streamEnd', taskId, messageId: this._streamingAssistantId });
+            this._streamingAssistantId = null;
+          }
+          break;
+        }
+      }
+    };
+
+    try {
+      await this._runner.run(text, onEvent);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this._appendTranscript({ id: this._newId('error'), role: 'error', code: 'task_error', message });
+      this.post({ type: 'error', taskId, code: 'task_error', message });
+    } finally {
+      if (this._streamingAssistantId) {
+        this._finalizeStreamingAssistant();
+      }
+      this._activeTaskId = null;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Transcript helpers                                                  */
+  /* ------------------------------------------------------------------ */
+
+  private _appendTranscript(msg: UiMessage): void {
+    this._transcript.push(msg);
+    // Keep the in-memory transcript bounded.
+    if (this._transcript.length > 400) {
+      this._transcript = this._transcript.slice(-400);
+    }
+  }
+
+  private _appendAssistantDelta(delta: string): void {
+    if (!this._streamingAssistantId) {
+      return;
+    }
+    const msg = this._transcript.find((m) => m.id === this._streamingAssistantId);
+    if (msg && msg.role === 'assistant') {
+      msg.text += delta;
+    }
+  }
+
+  private _finalizeStreamingAssistant(): void {
+    const id = this._streamingAssistantId;
+    if (id) {
+      const msg = this._transcript.find((m) => m.id === id);
+      if (msg && msg.role === 'assistant') {
+        msg.state = 'done';
+      }
+    }
+    this._streamingAssistantId = null;
+  }
+
+  private _newId(prefix: string): string {
+    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private _newTaskId(): string {
+    return this._newId('task');
   }
 
   /** Runtime validation of untrusted webview messages before they enter the host. */

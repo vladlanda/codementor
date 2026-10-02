@@ -33,7 +33,7 @@ export interface ToolSpec {
 }
 
 export interface ChatRequest {
-  model: string;
+  model?: string;
   messages: ChatMessage[];
   tools?: ToolSpec[];
   temperature?: number;
