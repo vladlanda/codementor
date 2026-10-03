@@ -162,7 +162,9 @@
     "lint": "eslint src --ext ts",
     "pretest": "npm run compile && npm run lint",
     "test": "node --test \"out/test/*.test.js\"",
-    "package": "vsce package"
+    "package": "vsce package",
+    "dev": "node scripts/dev-launch.js",
+    "dev:stop": "node scripts/dev-stop.js"
   },
   "dependencies": {
     "zod": "^3.23.8"
