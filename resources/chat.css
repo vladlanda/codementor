@@ -78,3 +78,26 @@ body { display: flex; flex-direction: column; }
 .approval-actions .outcome { font-size: 12px; }
 .approval-actions .outcome.approved { color: #4ec9b0; }
 .approval-actions .outcome.denied { color: #f48771; }
+
+.btn.ghost { background: transparent; color: var(--fg); border-color: var(--border); }
+.btn.followup { margin: 0 8px 6px 0; }
+
+.msg.checkpoint .checkpoint-q { margin-top: 6px; font-style: italic; color: var(--muted); }
+
+.msg.knowledgeCheck { align-self: stretch; max-width: 100%; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid #d2a84d; }
+.msg.knowledgeCheck .check-q { font-weight: 600; margin-bottom: 6px; }
+.msg.knowledgeCheck .check-hint { margin-top: 6px; padding: 6px 8px; background: var(--bg); border-radius: 5px; font-size: 12px; color: var(--muted); }
+.msg.knowledgeCheck .check-hint.hidden { display: none; }
+.msg.knowledgeCheck .check-hint.answered { color: #4ec9b0; }
+.msg.knowledgeCheck .check-hint.skipped { color: var(--muted); font-style: italic; }
+.msg.knowledgeCheck .check-controls { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.msg.knowledgeCheck .check-answer {
+  width: 100%; resize: vertical; min-height: 48px; max-height: 160px;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 5px; padding: 6px 8px; font: inherit;
+}
+.msg.knowledgeCheck .check-actions { display: flex; gap: 8px; }
+.msg.knowledgeCheck .check-actions .btn { margin-left: 0; }
+
+.msg.followUps { align-self: stretch; max-width: 100%; background: transparent; border: 1px dashed var(--border); }
+.msg.followUps .followups { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }

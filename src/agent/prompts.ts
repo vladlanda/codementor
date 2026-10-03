@@ -1,13 +1,19 @@
 import type { AutonomyMode, ExplanationDepth } from '../messaging/protocol';
+import { buildTeachingInstructions } from './teaching';
 
 /**
  * Builds the agent's system prompt. Kept free of the `vscode` module so it can
- * be unit-tested. The workspace description is injected by the caller.
+ * be unit-tested. The workspace description and learning profile are injected by
+ * the caller.
  */
 export interface PromptOptions {
   autonomy: AutonomyMode;
   explanationDepth: ExplanationDepth;
   workspaceDescription?: string;
+  /** When true, the model is asked to emit structured teaching artifacts. */
+  teachingEnabled?: boolean;
+  /** Compact snapshot of the learning profile to tailor depth and avoid re-teaching. */
+  profileSnapshot?: string;
 }
 
 export function buildSystemPrompt(opts: PromptOptions): string {
@@ -44,8 +50,18 @@ export function buildSystemPrompt(opts: PromptOptions): string {
     '',
     '## Explanation style',
     depthNote[opts.explanationDepth],
+    ...(opts.profileSnapshot
+      ? [
+          '',
+          '## What the user already knows',
+          'Do not re-teach concepts the user has already demonstrated; build on them instead.',
+          opts.profileSnapshot,
+        ]
+      : []),
     '',
     '## Current workspace',
     opts.workspaceDescription?.trim() || '(no workspace snapshot available — inspect with list_files first).',
+    '',
+    buildTeachingInstructions(opts.teachingEnabled ?? false).split('\n'),
   ].join('\n');
 }

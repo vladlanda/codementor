@@ -2,6 +2,12 @@ import * as vscode from 'vscode';
 
 import type { AutonomyMode, ExplanationDepth, ProviderType } from '../messaging/protocol';
 
+export interface TeachingSettings {
+  enabled: boolean;
+  knowledgeChecks: boolean;
+  followUps: boolean;
+}
+
 export interface ProviderSettings {
   type: ProviderType;
   baseUrl: string;
@@ -12,6 +18,8 @@ export interface ProviderSettings {
 export interface AgentSettings {
   autonomy: AutonomyMode;
   explanationDepth: ExplanationDepth;
+  teaching: TeachingSettings;
+  experienceLevel: string;
   approvalFileChanges: boolean;
   approvalTerminalCommands: boolean;
   maxToolIterations: number;
@@ -66,6 +74,12 @@ export class SettingsService {
     return {
       autonomy: (cfg.get<AutonomyMode>('autonomy', 'guided') as AutonomyMode) ?? 'guided',
       explanationDepth: (cfg.get<ExplanationDepth>('explanationDepth', 'standard') as ExplanationDepth) ?? 'standard',
+      teaching: {
+        enabled: cfg.get<boolean>('teaching.enabled', true),
+        knowledgeChecks: cfg.get<boolean>('teaching.knowledgeChecks', true),
+        followUps: cfg.get<boolean>('teaching.followUps', true),
+      },
+      experienceLevel: cfg.get<string>('experienceLevel', 'beginner') ?? 'beginner',
       approvalFileChanges: cfg.get<boolean>('approval.fileChanges', true),
       approvalTerminalCommands: cfg.get<boolean>('approval.terminalCommands', true),
       maxToolIterations: Math.max(1, Math.min(200, cfg.get<number>('maxToolIterations', 25))),

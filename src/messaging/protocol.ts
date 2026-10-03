@@ -55,6 +55,30 @@ export interface KnowledgeCheck {
   hint?: string;
 }
 
+export interface FollowUpSuggestion {
+  label: string;
+  /** Prompt text sent as the next user turn when clicked. */
+  prompt: string;
+}
+
+export type ConceptStatus = 'introduced' | 'demonstrated' | 'needs_review';
+
+export interface ConceptRecord {
+  concept: string;
+  status: ConceptStatus;
+  /** Short note about the evidence behind the current status. */
+  evidence?: string;
+  updatedAt: number;
+}
+
+/** Lightweight, editable learning profile persisted across sessions. */
+export interface LearningProfileData {
+  experienceLevel?: string;
+  concepts: ConceptRecord[];
+  notes?: string;
+  updatedAt: number;
+}
+
 /* ------------------------------------------------------------------ */
 /* UI -> Host                                                          */
 /* ------------------------------------------------------------------ */
@@ -91,13 +115,37 @@ export interface NewChatMsg {
   type: 'newChat';
 }
 
+/** User's answer to an optional knowledge check (evidence for the profile). */
+export interface KnowledgeCheckResponseMsg {
+  type: 'knowledgeCheckResponse';
+  taskId: string;
+  checkId: string;
+  concept?: string;
+  answer: string;
+}
+
+/** User clicked a suggested follow-up prompt; host runs it as a new task. */
+export interface FollowUpMsg {
+  type: 'followUp';
+  taskId: string;
+  prompt: string;
+}
+
+/** Ask the host for the current learning profile snapshot. */
+export interface LearningProfileRequestMsg {
+  type: 'learningProfileRequest';
+}
+
 export type UiToHostMessage =
   | UserMessageMsg
   | ApprovalResponseMsg
   | CancelTaskMsg
   | RequestStateMsg
   | ConnectionTestMsg
-  | NewChatMsg;
+  | NewChatMsg
+  | KnowledgeCheckResponseMsg
+  | FollowUpMsg
+  | LearningProfileRequestMsg;
 
 /* ------------------------------------------------------------------ */
 /* Host -> UI                                                          */
@@ -120,6 +168,14 @@ export interface StreamEndMsg {
   type: 'streamEnd';
   taskId: string;
   messageId: string;
+}
+
+/** Authoritative final text for a streamed assistant message (artifacts stripped). */
+export interface AssistantTextMsg {
+  type: 'assistantText';
+  taskId: string;
+  messageId: string;
+  text: string;
 }
 
 export interface TaskStateMsg {
@@ -157,7 +213,20 @@ export interface LearningCheckpointMsg {
 export interface KnowledgeCheckMsg {
   type: 'knowledgeCheck';
   taskId: string;
+  checkId: string;
+  concept?: string;
   check: KnowledgeCheck;
+}
+
+export interface FollowUpsMsg {
+  type: 'followUps';
+  taskId: string;
+  suggestions: FollowUpSuggestion[];
+}
+
+export interface LearningProfileMsg {
+  type: 'learningProfile';
+  profile: LearningProfileData;
 }
 
 export interface ConnectionInfoMsg {
@@ -191,17 +260,22 @@ export type UiMessage =
   | { id: string; role: 'tool'; tool: string; status: string; summary: string }
   | { id: string; role: 'approval'; kind: string; title: string; description: string; outcome?: 'approved' | 'denied' }
   | { id: string; role: 'checkpoint'; concept: string; explanation: string; question?: string }
+  | { id: string; role: 'knowledgeCheck'; checkId?: string; concept?: string; question: string; hint?: string; answered?: string }
+  | { id: string; role: 'followUps'; suggestions: FollowUpSuggestion[] }
   | { id: string; role: 'error'; code: string; message: string };
 
 export type HostToUiMessage =
   | StreamStartMsg
   | StreamChunkMsg
   | StreamEndMsg
+  | AssistantTextMsg
   | TaskStateMsg
   | ApprovalRequestMsg
   | ToolEventMsg
   | LearningCheckpointMsg
   | KnowledgeCheckMsg
+  | FollowUpsMsg
+  | LearningProfileMsg
   | ConnectionInfoMsg
   | ErrorMsg
   | StateSnapshotMsg;

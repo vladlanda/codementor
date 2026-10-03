@@ -11,6 +11,8 @@ import { ConnectionManager } from '../providers/ConnectionManager';
 import { SettingsService } from '../services/SettingsService';
 import { ProviderService } from '../providers/ProviderService';
 import { AgentRunner } from '../services/AgentRunner';
+import { LearningProfile } from '../learning/LearningProfile';
+import { LearningProfilePanel } from './LearningProfilePanel';
 import type { AgentEvent } from '../agent/Orchestrator';
 
 /**
@@ -25,18 +27,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _disposed = false;
 
   private readonly _runner: AgentRunner;
+  private readonly _profile?: LearningProfile;
   private _transcript: UiMessage[] = [];
   private _activeTaskId: string | null = null;
   private _activeTaskState: TaskState = 'idle';
   private _streamingAssistantId: string | null = null;
+  /** checkId -> concept + transcript message id, so a response can be linked back. */
+  private _checks = new Map<string, { concept?: string; msgId: string }>();
 
   constructor(
     private readonly _context: vscode.ExtensionContext,
     private readonly _settings: SettingsService,
     private readonly _connection: ConnectionManager,
-    providerService: ProviderService
+    providerService: ProviderService,
+    profile?: LearningProfile
   ) {
-    this._runner = new AgentRunner(providerService, this._settings);
+    this._profile = profile;
+    this._runner = new AgentRunner(providerService, this._settings, this._profile);
   }
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -114,8 +121,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     const selected = editor.document.getText(editor.selection);
     const rel = vscode.workspace.asRelativePath(editor.document.uri);
+    // Tailor the explanation depth to the learner's profile (spec §5.3).
+    const profile = this._runner.getProfile();
+    const profileContext = profile.experienceLevel
+      ? `The learner's self-reported experience level is ${profile.experienceLevel}. `
+      : '';
     const task =
       `Explain the following ${editor.document.languageId} code from ${rel} (lines ${editor.selection.start.line + 1}–${editor.selection.end.line + 1}). ` +
+      profileContext +
       'Ground your explanation in the actual code, point out the key concepts, and note anything surprising or worth improving.\n\n' +
       '```' + editor.document.languageId + '\n' + selected + '\n```';
     if (!this._view) {
@@ -149,8 +162,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public openLearningProfile(): void {
-    // Learning profile view lands in M6.
-    void vscode.window.showInformationMessage('CodeMentor: learning profile is coming in a later milestone.');
+    LearningProfilePanel.show({
+      getProfile: () => this._runner.getProfile(),
+      setExperienceLevel: (level) => this._runner.setProfileExperienceLevel(level),
+      setNotes: (notes) => this._runner.setProfileNotes(notes),
+    });
   }
 
   /* ------------------------------------------------------------------ */
@@ -182,6 +198,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       case 'newChat': {
         this.resetChat();
+        break;
+      }
+      case 'knowledgeCheckResponse': {
+        if (msg.answer.trim().length === 0) {
+          break;
+        }
+        // Conservative: an answered check is evidence of engagement, not mastery.
+        this._runner.recordEngagement(msg.concept ?? '');
+        this._markCheckAnswered(msg.checkId, msg.answer);
+        break;
+      }
+      case 'followUp': {
+        if (this._runner.active) {
+          this.post({ type: 'error', taskId: msg.taskId, code: 'busy', message: 'A task is already running. Cancel it first.' });
+          return;
+        }
+        this._appendTranscript({ id: this._newId('user'), role: 'user', text: msg.prompt });
+        void this._runTask(msg.taskId, msg.prompt);
+        break;
+      }
+      case 'learningProfileRequest': {
+        this.post({ type: 'learningProfile', profile: this._runner.getProfile() });
         break;
       }
       case 'connectionTest':
@@ -258,6 +296,51 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.post({ type: 'error', taskId, code: e.code, message: e.message });
           break;
         }
+        case 'assistant': {
+          // Authoritative clean text (artifacts stripped). Replace the streamed text
+          // so the transcript never shows the raw teaching-artifact block.
+          if (this._streamingAssistantId) {
+            const msg = this._transcript.find((m) => m.id === this._streamingAssistantId);
+            if (msg && msg.role === 'assistant') {
+              msg.text = e.text;
+              msg.state = 'done';
+            }
+            this.post({ type: 'assistantText', taskId, messageId: this._streamingAssistantId, text: e.text });
+          }
+          break;
+        }
+        case 'checkpoint': {
+          this._appendTranscript({
+            id: this._newId('checkpoint'),
+            role: 'checkpoint',
+            concept: e.checkpoint.concept,
+            explanation: e.checkpoint.explanation,
+            question: e.checkpoint.question,
+          });
+          this.post({ type: 'learningCheckpoint', taskId, checkpoint: e.checkpoint });
+          break;
+        }
+        case 'knowledgeCheck': {
+          const msgId = this._newId('knowledgeCheck');
+          this._appendTranscript({
+            id: msgId,
+            role: 'knowledgeCheck',
+            checkId: e.checkId,
+            concept: e.concept,
+            question: e.check.question,
+            hint: e.check.hint,
+          });
+          this._checks.set(e.checkId, { concept: e.concept, msgId });
+          this.post({ type: 'knowledgeCheck', taskId, checkId: e.checkId, concept: e.concept, check: e.check });
+          break;
+        }
+        case 'followUps': {
+          if (e.suggestions.length) {
+            this._appendTranscript({ id: this._newId('followUps'), role: 'followUps', suggestions: e.suggestions });
+            this.post({ type: 'followUps', taskId, suggestions: e.suggestions });
+          }
+          break;
+        }
         case 'done': {
           if (this._streamingAssistantId) {
             this.post({ type: 'streamEnd', taskId, messageId: this._streamingAssistantId });
@@ -291,6 +374,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Keep the in-memory transcript bounded.
     if (this._transcript.length > 400) {
       this._transcript = this._transcript.slice(-400);
+    }
+  }
+
+  /** Mark a knowledge check in the transcript as answered (restored on webview reload). */
+  private _markCheckAnswered(checkId: string, answer: string): void {
+    const entry = this._checks.get(checkId);
+    if (!entry) {
+      return;
+    }
+    const msg = this._transcript.find((m) => m.id === entry.msgId);
+    if (msg && msg.role === 'knowledgeCheck') {
+      msg.answered = answer;
     }
   }
 
@@ -336,6 +431,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       'requestState',
       'connectionTest',
       'newChat',
+      'knowledgeCheckResponse',
+      'followUp',
+      'learningProfileRequest',
     ]);
     return typeof candidate.type === 'string' && valid.has(candidate.type) ? (msg as UiToHostMessage) : null;
   }

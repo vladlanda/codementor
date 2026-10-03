@@ -123,6 +123,27 @@
           "default": "standard",
           "description": "Default explanation depth for teaching content."
         },
+        "codementor.teaching.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the teaching engine: checkpoints, knowledge checks, and follow-up suggestions attached to explanations."
+        },
+        "codementor.teaching.knowledgeChecks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer optional knowledge checks to reinforce a concept. Disable to skip them."
+        },
+        "codementor.teaching.followUps": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer suggested follow-up prompts (deeper explanation, simpler example, an exercise, etc.)."
+        },
+        "codementor.experienceLevel": {
+          "type": "string",
+          "enum": ["beginner", "intermediate", "advanced"],
+          "default": "beginner",
+          "description": "Self-reported experience level. Used to tailor teaching depth and recorded in the learning profile."
+        },
         "codementor.approval.fileChanges": {
           "type": "boolean",
           "default": true,

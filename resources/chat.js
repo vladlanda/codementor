@@ -29,8 +29,16 @@
 
   function appendMessage(msg) {
     const box = el('div', 'msg ' + msg.role);
-    const role = el('div', 'role',
-      msg.role === 'user' ? 'You' : msg.role === 'assistant' ? 'CodeMentor' : msg.role === 'tool' ? 'Tool' : msg.role === 'error' ? 'Error' : 'Checkpoint');
+    const roleLabel =
+      msg.role === 'user' ? 'You' :
+      msg.role === 'assistant' ? 'CodeMentor' :
+      msg.role === 'tool' ? 'Tool' :
+      msg.role === 'error' ? 'Error' :
+      msg.role === 'checkpoint' ? 'Checkpoint' :
+      msg.role === 'knowledgeCheck' ? 'Knowledge check' :
+      msg.role === 'followUps' ? 'Follow-up prompts' :
+      'Message';
+    box.appendChild(el('div', 'role', roleLabel));
     let body = el('div', 'body');
     if (msg.role === 'user' || msg.role === 'assistant' || msg.role === 'error') {
       body.innerHTML = escapeHtml(msg.text || msg.message || '');
@@ -39,14 +47,69 @@
       body.textContent = '[' + msg.status + '] ' + msg.tool + ' — ' + msg.summary;
     } else if (msg.role === 'checkpoint') {
       body.innerHTML = '<strong>' + escapeHtml(msg.concept) + '</strong><br>' + escapeHtml(msg.explanation);
+      if (msg.question) body.appendChild(el('div', 'checkpoint-q', msg.question));
     } else if (msg.role === 'approval') {
       body.textContent = msg.title + ' — ' + msg.description;
+    } else if (msg.role === 'knowledgeCheck') {
+      body.appendChild(el('div', 'check-q', msg.question || ''));
+      if (msg.answered) {
+        const hint = el('div', 'check-hint answered', 'Your answer: ' + msg.answered);
+        body.appendChild(hint);
+      } else {
+        body.appendChild(renderKnowledgeCheckControls(msg));
+      }
+    } else if (msg.role === 'followUps') {
+      const wrap = el('div', 'followups');
+      (msg.suggestions || []).forEach((s) => {
+        const btn = el('button', 'btn followup', s.label);
+        btn.addEventListener('click', () => {
+          vscode.postMessage({ type: 'followUp', taskId: activeTaskId || 'task_' + Date.now().toString(36), prompt: s.prompt });
+          setBusy(true);
+        });
+        wrap.appendChild(btn);
+      });
+      body.appendChild(wrap);
     }
-    box.appendChild(role);
     box.appendChild(body);
     transcript.appendChild(box);
     transcript.scrollTop = transcript.scrollHeight;
     return box;
+  }
+
+  /** Render the input / hint / submit controls for an (unanswered) knowledge check. */
+  function renderKnowledgeCheckControls(msg) {
+    const wrap = el('div', 'check-controls');
+    if (msg.hint) {
+      const hintBtn = el('button', 'btn ghost', 'Show hint');
+      const hintBox = el('div', 'check-hint hidden', msg.hint);
+      hintBtn.addEventListener('click', () => {
+        hintBox.classList.toggle('hidden');
+        hintBtn.textContent = hintBox.classList.contains('hidden') ? 'Show hint' : 'Hide hint';
+      });
+      wrap.appendChild(hintBtn);
+      wrap.appendChild(hintBox);
+    }
+    const textarea = el('textarea', 'check-answer');
+    textarea.rows = 3;
+    textarea.placeholder = 'Type your answer…';
+    const actions = el('div', 'check-actions');
+    const submit = el('button', 'btn primary', 'Submit');
+    const skip = el('button', 'btn ghost', 'Skip');
+    const taskId = activeTaskId || 'task_' + Date.now().toString(36);
+    submit.addEventListener('click', () => {
+      const answer = textarea.value.trim();
+      if (!answer) return;
+      wrap.innerHTML = '<div class="check-hint answered">Your answer: ' + escapeHtml(answer) + '</div>';
+      vscode.postMessage({ type: 'knowledgeCheckResponse', taskId, checkId: msg.checkId, concept: msg.concept, answer });
+    });
+    skip.addEventListener('click', () => {
+      wrap.innerHTML = '<div class="check-hint skipped">Skipped</div>';
+    });
+    actions.appendChild(submit);
+    actions.appendChild(skip);
+    wrap.appendChild(textarea);
+    wrap.appendChild(actions);
+    return wrap;
   }
 
   function appendApproval(msg) {
@@ -148,6 +211,28 @@
         break;
       case 'learningCheckpoint':
         appendMessage({ role: 'checkpoint', concept: msg.checkpoint.concept, explanation: msg.checkpoint.explanation, question: msg.checkpoint.question });
+        break;
+      case 'assistantText': {
+        // Authoritative, cleaned assistant text (teaching artifacts stripped).
+        // Replace the body of the streaming message so the raw block never sticks.
+        if (streamingMessageEl) {
+          const body = streamingMessageEl.querySelector('.body');
+          if (body) body.innerHTML = escapeHtml(msg.text);
+          streamingMessageEl.classList.remove('streaming');
+        }
+        break;
+      }
+      case 'knowledgeCheck':
+        appendMessage({
+          role: 'knowledgeCheck',
+          checkId: msg.checkId,
+          concept: msg.concept,
+          question: msg.check.question,
+          hint: msg.check.hint,
+        });
+        break;
+      case 'followUps':
+        appendMessage({ role: 'followUps', suggestions: msg.suggestions });
         break;
       default:
         break;

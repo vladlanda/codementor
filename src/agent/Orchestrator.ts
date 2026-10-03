@@ -2,12 +2,24 @@ import type { LLMProvider, ChatMessage, ChatResult, ToolCall } from '../provider
 import { ProviderError } from '../providers/provider';
 import type { ToolRegistry } from '../tools/registry';
 import type { ApprovalRequest, ToolContext, ToolResult } from '../tools/types';
-import type { AutonomyMode, ExplanationDepth, TaskState } from '../messaging/protocol';
+import type {
+  AutonomyMode,
+  ExplanationDepth,
+  FollowUpSuggestion,
+  KnowledgeCheck,
+  LearningCheckpoint,
+  TaskState,
+} from '../messaging/protocol';
 import { TaskStateMachine } from './TaskStateMachine';
 
 /**
  * Events the orchestrator emits. Decoupled from VS Code so the whole agent loop
  * can run under the plain Node test runner. The host maps these to webview messages.
+ *
+ * The `checkpoint`, `knowledgeCheck`, and `followUps` variants are not produced by
+ * the loop itself; they are injected by the host glue (AgentRunner) when it parses
+ * teaching artifacts out of the final answer. They are declared here so the event
+ * type has a single source of truth.
  */
 export type AgentEvent =
   | { type: 'state'; from: TaskState; to: TaskState }
@@ -16,7 +28,10 @@ export type AgentEvent =
   | { type: 'tool'; name: string; args: unknown; result: ToolResult }
   | { type: 'approval'; request: ApprovalRequest & { requestId: string } }
   | { type: 'error'; code: string; message: string; retryable: boolean }
-  | { type: 'done'; text: string; iterations: number };
+  | { type: 'done'; text: string; iterations: number }
+  | { type: 'checkpoint'; checkpoint: LearningCheckpoint }
+  | { type: 'knowledgeCheck'; checkId: string; concept?: string; check: KnowledgeCheck }
+  | { type: 'followUps'; suggestions: FollowUpSuggestion[] };
 
 export interface OrchestratorOptions {
   provider: LLMProvider;
@@ -32,6 +47,13 @@ export interface OrchestratorOptions {
   timeoutMs?: number;
   /** Seed conversation (previous turns) for follow-ups. */
   history?: ChatMessage[];
+  /**
+   * Optional hook to transform the final answer before it completes: strip
+   * structured artifacts, report them via onEvent, and return the text that
+   * should be surfaced as the assistant message. Returns the (possibly trimmed)
+   * visible text.
+   */
+  transformFinalAnswer?: (text: string) => string;
 }
 
 /**
@@ -118,7 +140,11 @@ export class Orchestrator {
         if (result.toolCalls.length === 0) {
           this._go('executing');
           this._sm.transition('explaining');
-          this._finishCompleted(result.text);
+          const visible = this._opts.transformFinalAnswer ? this._opts.transformFinalAnswer(result.text) : result.text;
+          // Authoritative clean text: lets the host replace the streamed text (which
+          // may have briefly included structured teaching artifacts).
+          this._emit({ type: 'assistant', text: visible });
+          this._finishCompleted(visible);
           return;
         }
 

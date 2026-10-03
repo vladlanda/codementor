@@ -4,13 +4,19 @@ import { ChatViewProvider } from './ui/ChatViewProvider';
 import { ProviderService } from './providers/ProviderService';
 import { SettingsService } from './services/SettingsService';
 import { ConnectionManager } from './providers/ConnectionManager';
+import { LearningProfile } from './learning/LearningProfile';
+import { GlobalStateProfileStore } from './services/GlobalStateProfileStore';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const settings = new SettingsService(context.secrets);
   const providerService = new ProviderService(settings, context.secrets);
   const connection = new ConnectionManager(providerService, settings);
 
-  const view = new ChatViewProvider(context, settings, connection, providerService);
+  // Learning profile (spec §5.3) — a persistence-agnostic core, backed here by
+  // the extension's global state so it survives across sessions.
+  const profile = new LearningProfile(new GlobalStateProfileStore(context.globalState));
+
+  const view = new ChatViewProvider(context, settings, connection, providerService, profile);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, view, {
       webviewOptions: { retainContextWhenHidden: true },
