@@ -6,6 +6,9 @@ out/
 dist/
 *.vsix
 
+# Dev host runtime instance (isolated user-data-dir, logs)
+.dev-instance/
+
 # Logs
 *.log
 npm-debug.log*

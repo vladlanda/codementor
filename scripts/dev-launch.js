@@ -12,6 +12,8 @@
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 
+const isWin = process.platform === 'win32';
+
 const root = path.join(__dirname, '..');
 const tmp = path.join(root, '.dev-instance');
 const ud = path.join(tmp, 'udata');
@@ -22,7 +24,31 @@ const logs = path.join(ud, 'logs');
 require('fs').mkdirSync(ud, { recursive: true });
 require('fs').mkdirSync(exts, { recursive: true });
 
-const code = 'D:\\Programs\\Microsoft VS Code\\Code.exe';
+// Resolve the VS Code binary for the current platform.
+function resolveCodeBinary() {
+  // Prefer the `code` CLI on PATH, then common install locations.
+  const candidates = isWin
+    ? [
+        'code',
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+        'D:\\Programs\\Microsoft VS Code\\Code.exe',
+      ]
+    : [
+        'code',
+        '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+        '/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code',
+        '/usr/local/bin/code',
+        '/opt/homebrew/bin/code',
+      ];
+  const fs = require('fs');
+  for (const c of candidates) {
+    if (c === 'code') continue; // handled via PATH below
+    if (fs.existsSync(c)) return c;
+  }
+  return 'code'; // fall back to PATH lookup
+}
+const code = resolveCodeBinary();
+
 const args = [
   `--extensionDevelopmentPath=${root}`,
   `--extensions-dir=${exts}`,
@@ -32,18 +58,38 @@ const args = [
 ];
 
 console.log('Launching dev host (no debugger)…');
+console.log('  code binary:', code);
 console.log('  user-data-dir:', ud);
 console.log('  extension dev path:', root);
-// VS Code writes its own logs under <ud>\logs — no need to redirect stdio.
+// VS Code writes its own logs under <ud>/logs — no need to redirect stdio.
 spawn(code, args, { stdio: 'ignore', detached: true, windowsHide: true }).unref();
+
+// Find a running dev-host process using our isolated user-data dir.
+function findDevHostPid() {
+  const needle = ud.replace(/\\/g, '\\\\');
+  if (isWin) {
+    return execSync(
+      `Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like "*${needle}*" } | Select-Object -First 1 -ExpandProperty ProcessId`,
+      { shell: 'powershell', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).toString().trim();
+  }
+  // macOS / Linux: match any process whose command line references our user-data dir.
+  const out = execSync(`ps -axww -o pid=,command=`, { stdio: ['ignore', 'pipe', 'ignore'] })
+    .toString()
+    .split('\n')
+    .map((line) => {
+      const m = line.match(/^\s*(\d+)\s+(.*)$/);
+      return m ? { pid: m[1], cmd: m[2] } : null;
+    })
+    .filter((p) => p && p.cmd.includes(needle))
+    .map((p) => p.pid);
+  return out[0] || '';
+}
 
 setTimeout(() => {
   try {
     // check if any Code process is using our isolated user-data dir
-    const ps = execSync(
-      `Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like "*${ud}*" } | Select-Object -First 1 -ExpandProperty ProcessId`,
-      { shell: 'powershell', stdio: ['ignore', 'pipe', 'ignore'] }
-    ).toString().trim();
+    const ps = findDevHostPid();
     if (ps) {
       console.log(`\nSUCCESS — dev host is running (pid ${ps}).`);
       console.log('Look for the new VS Code window. The CodeMentor sidebar should be active.');
